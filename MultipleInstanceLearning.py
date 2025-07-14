@@ -6,9 +6,14 @@ from tensorflow.keras.applications import VGG16
 import os
 import matplotlib
 import matplotlib.pyplot as plt
-os.environ["TF_USE_DIRECTML"] = "1"
+import itertools
+from sklearn.metrics import confusion_matrix
 
-print("DirectML Devices:", tf.config.list_physical_devices('GPU'))  # Should show your GPU
+print("GPU Devices:", tf.config.list_physical_devices('GPU'))
+print("GPU available:", tf.test.is_gpu_available(cuda_only=True))
+
+test_tensor = tf.constant([1.0, 2.0])
+print(test_tensor.device)  # Should show GPU
 
 def extract_patches(image, patch_size=56, stride=14):
     """Extract overlapping patches from an image"""
@@ -114,7 +119,8 @@ train_datagen = ImageDataGenerator(
     validation_split=0.2
 )
 
-train_path = "C:\\Users\\Borajin\\.cache\\data\\preprocessed\\Training"
+slurm_job_id = os.environ['SLURM_JOB_ID']
+train_path = f"/scratch/{slurm_job_id}/data/preprocessed/Training"
 
 # create training and validation generators from data
 train_dir_gen = train_datagen.flow_from_directory(
@@ -286,4 +292,86 @@ plt.tight_layout()
 plt.show()
 plt.close()
 
-# TODO implement confusion matrix
+### Testing model on test data - using confusion matrix
+# Create test generator
+test_path = f"/scratch/{slurm_job_id}/data/preprocessed/Testing"
+test_datagen = ImageDataGenerator()
+test_dir_gen = test_datagen.flow_from_directory(
+    test_path,
+    target_size=(224, 224),
+    batch_size=16,
+    class_mode='categorical',
+    color_mode="grayscale",
+    shuffle=False  # Important for confusion matrix
+)
+
+# Convert test generator to arrays
+X_test, y_test = extract_generator_data(test_dir_gen)
+
+# Create test MIL generator
+test_mil_gen = PatchBagGenerator(
+    image_arrays=X_test,
+    labels=y_test,
+    patch_size=56,
+    stride=14,
+    batch_size=16
+)
+
+## build confusion matrix
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          filename="confusion_matrix.png",
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    plt.figure(figsize=(8, 6))
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+
+    print(cm)
+
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, format(cm[i, j], '.2f' if normalize else 'd'),
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    home_dir = os.path.expanduser('~')
+    save_path = os.path.join(home_dir, filename)
+    plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    plt.close
+
+# Get predictions
+y_pred = model.predict(test_mil_gen)
+y_pred_classes = np.argmax(y_pred, axis=1)
+y_true = np.argmax(y_test, axis=1)
+
+# Get class names from generator
+class_names = list(test_dir_gen.class_indices.keys())
+
+# Compute confusion matrix
+cnf_matrix = confusion_matrix(y_true, y_pred_classes)
+
+# Plot non-normalized confusion matrix
+plot_confusion_matrix(cnf_matrix, classes=class_names,
+                     title='Confusion Matrix')
+
+# Plot normalized confusion matrix
+plot_confusion_matrix(cnf_matrix, classes=class_names, normalize=True, filename='confusion_matrix_normalized.png',
+                     title='Normalized Confusion Matrix')
