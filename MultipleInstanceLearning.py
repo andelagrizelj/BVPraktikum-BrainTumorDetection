@@ -359,6 +359,49 @@ def plot_confusion_matrix(cm, classes,
 
 # Get predictions
 y_pred = model.predict(test_mil_gen)
+
+
+# -------------------------------
+# 1. Build patch feature model
+# -------------------------------
+patch_feature_model = Model(
+    inputs=model.input,
+    outputs=model.get_layer(index=-3).output  # -3 = TimeDistributed output layer
+)
+
+# -------------------------------
+# 2. Get one batch of test images
+# -------------------------------
+bags, labels = test_mil_gen[0]  # shape: (batch_size, num_patches, 56, 56, 1)
+
+# -------------------------------
+# 3. Predict per-patch features
+# -------------------------------
+patch_features = patch_feature_model.predict(bags)  # shape: (batch_size, num_patches, feature_dim)
+
+# -------------------------------
+# 4. Find most activated patch per image
+# -------------------------------
+patch_activations = np.max(patch_features, axis=-1)  # shape: (batch_size, num_patches)
+most_activated_indices = np.argmax(patch_activations, axis=1)  # shape: (batch_size,)
+
+# -------------------------------
+# 5. Visualize
+# -------------------------------
+num_to_show = min(5, bags.shape[0])
+for i in range(num_to_show):
+    patches = bags[i]  # shape: (num_patches, 56, 56, 1)
+    max_idx = most_activated_indices[i]
+    most_activated_patch = patches[max_idx].squeeze()
+
+    plt.figure(figsize=(4, 4))
+    plt.imshow(most_activated_patch, cmap='gray')
+    plt.title(f"Most Activated Patch\nTrue: {np.argmax(labels[i])}, Pred: {np.argmax(y_pred[i])}")
+    plt.axis('off')
+    plt.show()
+
+
+
 y_pred_classes = np.argmax(y_pred, axis=1)
 y_true = np.argmax(y_test, axis=1)
 
